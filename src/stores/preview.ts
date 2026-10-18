@@ -65,17 +65,23 @@ function isPreviewWidth(value: unknown): value is PreviewWidth {
   return value === PREVIEW_WIDTH_MOBILE || value === PREVIEW_WIDTH_DESKTOP
 }
 
-export function migratePreviewState(persistedState: unknown) {
+export function migratePreviewState(persistedState: unknown, version: number) {
   if (!isRecord(persistedState)) {
     return { previewWidth: PREVIEW_WIDTH_MOBILE }
   }
 
   const { userPreferredWidth, ...settings } = persistedState
+  const width = version === 0 ? userPreferredWidth : settings.previewWidth
+  const previewWidth = isPreviewWidth(width) ? width : PREVIEW_WIDTH_MOBILE
+
+  const mermaidTheme = settings.mermaidTheme === '' || settings.mermaidTheme === 'dark'
+    ? settings.mermaidTheme
+    : ''
+
   return {
     ...settings,
-    previewWidth: isPreviewWidth(userPreferredWidth)
-      ? userPreferredWidth
-      : PREVIEW_WIDTH_MOBILE,
+    previewWidth,
+    mermaidTheme,
   }
 }
 
@@ -115,7 +121,7 @@ export const usePreviewStore = create<PreviewState>()(
     }),
     {
       name: 'bm.md.preview',
-      version: 1,
+      version: 2,
       skipHydration: true,
       partialize: partializePreviewState,
       migrate: migratePreviewState,
