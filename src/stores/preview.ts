@@ -1,9 +1,13 @@
 import type { InfographicPaletteId, InfographicThemeId } from '@/themes/infographic-theme'
 import type { MarkdownStyleId } from '@/themes/markdown-style/metadata'
 import type { MermaidThemeId } from '@/themes/mermaid-theme'
+import { pick } from 'es-toolkit'
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
-import { DEFAULT_MARKDOWN_STYLE_ID } from '@/themes/markdown-style/metadata'
+import { codeThemeIds } from '@/themes/code-theme/metadata'
+import { infographicPaletteIds, infographicThemeIds } from '@/themes/infographic-theme'
+import { DEFAULT_MARKDOWN_STYLE_ID, markdownStyleIds } from '@/themes/markdown-style/metadata'
+import { mermaidThemeIds } from '@/themes/mermaid-theme'
 
 export const PREVIEW_WIDTH_MOBILE = 415
 export const PREVIEW_WIDTH_DESKTOP = 768
@@ -45,6 +49,17 @@ interface PreviewState {
   setCustomCss: (css: string) => void
 }
 
+const themeDefaults = {
+  markdownStyle: DEFAULT_MARKDOWN_STYLE_ID,
+  codeTheme: 'kimbie-light',
+  mermaidTheme: '',
+  infographic: { theme: 'default', palette: 'antv' },
+} satisfies Pick<PreviewState, 'markdownStyle' | 'codeTheme' | 'mermaidTheme' | 'infographic'>
+
+function resolveThemeId<T extends string>(value: unknown, ids: readonly T[], fallback: T): T {
+  return typeof value === 'string' && ids.includes(value as T) ? value as T : fallback
+}
+
 export function partializePreviewState(state: PreviewState) {
   return {
     previewWidth: state.previewWidth,
@@ -74,9 +89,7 @@ export function migratePreviewState(persistedState: unknown, version: number) {
   const width = version === 0 ? userPreferredWidth : settings.previewWidth
   const previewWidth = isPreviewWidth(width) ? width : PREVIEW_WIDTH_MOBILE
 
-  const mermaidTheme = settings.mermaidTheme === '' || settings.mermaidTheme === 'dark'
-    ? settings.mermaidTheme
-    : ''
+  const mermaidTheme = resolveThemeId(settings.mermaidTheme, mermaidThemeIds, themeDefaults.mermaidTheme)
 
   return {
     ...settings,
@@ -102,16 +115,16 @@ export const usePreviewStore = create<PreviewState>()(
         previewColorScheme: state.previewColorScheme === 'dark' ? 'light' : 'dark',
       })),
 
-      markdownStyle: DEFAULT_MARKDOWN_STYLE_ID,
+      markdownStyle: themeDefaults.markdownStyle,
       setMarkdownStyle: markdownStyle => set({ markdownStyle }),
 
-      codeTheme: 'kimbie-light',
+      codeTheme: themeDefaults.codeTheme,
       setCodeTheme: codeTheme => set({ codeTheme }),
 
-      mermaidTheme: '',
+      mermaidTheme: themeDefaults.mermaidTheme,
       setMermaidTheme: mermaidTheme => set({ mermaidTheme }),
 
-      infographic: { theme: 'default', palette: 'antv' },
+      infographic: { ...themeDefaults.infographic },
       setInfographic: settings => set(state => ({
         infographic: { ...state.infographic, ...settings },
       })),
@@ -125,6 +138,25 @@ export const usePreviewStore = create<PreviewState>()(
       skipHydration: true,
       partialize: partializePreviewState,
       migrate: migratePreviewState,
+      merge: (persistedState, currentState) => {
+        if (!isRecord(persistedState)) {
+          return currentState
+        }
+        const settings = persistedState as Partial<PreviewState>
+        const infographic = isRecord(persistedState.infographic) ? persistedState.infographic : {}
+
+        return {
+          ...currentState,
+          ...pick(settings, ['previewWidth', 'previewColorScheme', 'customCss']),
+          markdownStyle: resolveThemeId(settings.markdownStyle, markdownStyleIds, themeDefaults.markdownStyle),
+          codeTheme: resolveThemeId(settings.codeTheme, codeThemeIds, themeDefaults.codeTheme),
+          mermaidTheme: resolveThemeId(settings.mermaidTheme, mermaidThemeIds, themeDefaults.mermaidTheme),
+          infographic: {
+            theme: resolveThemeId(infographic.theme, infographicThemeIds, themeDefaults.infographic.theme),
+            palette: resolveThemeId(infographic.palette, infographicPaletteIds, themeDefaults.infographic.palette),
+          },
+        }
+      },
       onRehydrateStorage: state => (rehydratedState, error) => {
         if (error) {
           console.error('Zustand preview rehydration error:', error)

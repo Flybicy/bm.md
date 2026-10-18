@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { DEFAULT_MARKDOWN_STYLE_ID } from '@/themes/markdown-style/metadata'
 import {
   migratePreviewState,
@@ -115,5 +115,116 @@ describe('preview store 持久化', () => {
         previewWidth: PREVIEW_WIDTH_MOBILE,
       })
     }
+  })
+})
+
+describe('preview store 恢复主题', () => {
+  let store: typeof usePreviewStore
+  let initialState: ReturnType<typeof usePreviewStore.getState>
+  let initialOptions: ReturnType<typeof usePreviewStore.persist.getOptions>
+  let storage: Storage
+
+  beforeEach(async () => {
+    vi.resetModules()
+    const values = new Map<string, string>()
+    storage = {
+      get length() { return values.size },
+      clear: () => values.clear(),
+      getItem: key => values.get(key) ?? null,
+      key: index => [...values.keys()][index] ?? null,
+      removeItem: key => values.delete(key),
+      setItem: (key, value) => values.set(key, value),
+    }
+    vi.stubGlobal('localStorage', storage)
+    vi.stubGlobal('window', { localStorage: storage })
+    store = (await import('./preview')).usePreviewStore
+    initialState = store.getState()
+    initialOptions = store.persist.getOptions()
+  })
+
+  afterEach(() => {
+    store.persist.setOptions(initialOptions)
+    store.setState(initialState, true)
+    vi.unstubAllGlobals()
+    vi.resetModules()
+  })
+
+  async function rehydrate(state: unknown, version = 2) {
+    storage.setItem('bm.md.preview', JSON.stringify({ state, version }))
+    await store.persist.rehydrate()
+    expect(store.persist.hasHydrated()).toBe(true)
+    expect(store.getState().hasHydrated).toBe(true)
+    return store.getState()
+  }
+
+  const preferences = {
+    previewWidth: PREVIEW_WIDTH_DESKTOP,
+    previewColorScheme: 'dark',
+    customCss: '#bm-md { color: red; }',
+  }
+  const validThemes = {
+    markdownStyle: 'bauhaus',
+    codeTheme: 'tokyo-night-dark',
+    mermaidTheme: 'dark',
+    infographic: { theme: 'hand-drawn', palette: 'spectral' },
+  }
+
+  it('当前 v2 非法主题回默认且保留其他偏好与 actions', async () => {
+    const state = await rehydrate({
+      ...preferences,
+      markdownStyle: 'unknown',
+      codeTheme: 'github-dark',
+      mermaidTheme: 'default',
+      infographic: { theme: 'unknown', palette: 'unknown' },
+      setCodeTheme: null,
+    })
+
+    expect(partializePreviewState(state)).toEqual({
+      ...preferences,
+      markdownStyle: DEFAULT_MARKDOWN_STYLE_ID,
+      codeTheme: 'kimbie-light',
+      mermaidTheme: '',
+      infographic: { theme: 'default', palette: 'antv' },
+    })
+    expect(state.setCodeTheme).toBe(initialState.setCodeTheme)
+    state.setCodeTheme('panda-syntax-light')
+    expect(store.getState().codeTheme).toBe('panda-syntax-light')
+  })
+
+  it('当前 v2 合法主题与非主题偏好全部保留', async () => {
+    const state = await rehydrate({ ...preferences, ...validThemes })
+    expect(partializePreviewState(state)).toEqual({ ...preferences, ...validThemes })
+  })
+
+  it.each([
+    [{ theme: 'dark', palette: 'unknown' }, { theme: 'dark', palette: 'antv' }],
+    [{ theme: 'unknown', palette: 'spectral' }, { theme: 'default', palette: 'spectral' }],
+  ])('信息图设置 %j 逐字段恢复', async (infographic, expected) => {
+    const state = await rehydrate({ ...validThemes, infographic })
+    expect(state.infographic).toEqual(expected)
+    expect(state.markdownStyle).toBe(validThemes.markdownStyle)
+    expect(state.codeTheme).toBe(validThemes.codeTheme)
+    expect(state.mermaidTheme).toBe(validThemes.mermaidTheme)
+  })
+
+  it.each([undefined, null, false, 42, 'dark', []])('缺失或非对象信息图 %j 回默认对象', async (infographic) => {
+    const state = await rehydrate({ ...preferences, ...validThemes, infographic })
+    expect(state.infographic).toEqual({ theme: 'default', palette: 'antv' })
+    expect(state.customCss).toBe(preferences.customCss)
+  })
+
+  it.each([0, 1])('v%i 先迁移宽度再校验主题', async (version) => {
+    const state = await rehydrate({
+      ...preferences,
+      ...validThemes,
+      previewWidth: version === 0 ? 500 : PREVIEW_WIDTH_DESKTOP,
+      userPreferredWidth: PREVIEW_WIDTH_DESKTOP,
+      codeTheme: 'unknown',
+    }, version)
+    expect(partializePreviewState(state)).toEqual({
+      ...preferences,
+      ...validThemes,
+      codeTheme: 'kimbie-light',
+    })
   })
 })
